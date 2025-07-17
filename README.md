@@ -1,6 +1,6 @@
 # Local Music Metadata Fetcher
 
-[![GitHub Issues](https://img.shields.io/github/issues/yourusername/reponame?color=critical)](https://github.com/yourusername/reponame/issues)
+[![GitHub Issues](https://img.shields.io/github/issues/yourusername/reponame?color=critical)](https://github.com/PythonBeginners0/Local-music-player/issues)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
