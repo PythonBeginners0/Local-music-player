@@ -2,3 +2,5 @@ psutil
 filetype
 mutagen
 PySide6
+requests
+certifi
