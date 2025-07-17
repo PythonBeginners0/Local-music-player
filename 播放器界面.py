@@ -43,27 +43,68 @@ def calculate_md5(file_path: Path, chunk_size=8192):
     return hash_md5.hexdigest()
 
 
+def write_status(status: str='normal', args=None):
+    normal_status_dict = "{'files': [], 'index': 0, 'volume': 30, 'play_mode': 0, 'position': 0}"
+    status_dict = {}
+    loop = False
+    try:
+        status_dict = eval(open(status_cache_path, 'r', encoding='utf-8').read())
+        if not isinstance(status_dict, dict):
+            loop = True
+        for i in ('files', 'index', 'volume', 'play_mode', 'position'):
+            if i not in status_dict:
+                loop = True
+        if not isinstance(status_dict['files'], list) and not loop:
+            loop = True
+    except Exception as e:
+        print(e)
+        loop = True
+    if loop:
+        open(status_cache_path, 'w', encoding='utf-8').write(normal_status_dict)
+        status_dict = eval(normal_status_dict)
+    if status == 'normal':
+        return
+    elif status == 'files':
+        status_dict['files'] = args
+    elif status == 'index':
+        status_dict['index'] = args
+    elif status == 'volume':
+        status_dict['volume'] = args
+    elif status == 'play_mode':
+        status_dict['play_mode'] = args
+    elif status == 'position':
+        status_dict['position'] = args
+    else:
+        return
+    with open(status_cache_path, 'w', encoding='utf-8') as file:
+        file.write(str(status_dict))
+
+
+def get_follow_folder(folder_path: Path):
+    loop = True
+    while loop:
+        dir_num = 0
+        last_dir = None
+        for i in folder_path.iterdir():
+            if i.is_file() and filetype.is_audio(i):
+                loop = False
+                break
+            elif i.is_dir():
+                dir_num += 1
+                if dir_num > 1:
+                    loop = False
+                    break
+                last_dir = i
+        if loop and dir_num == 1:
+            folder_path = last_dir
+    return folder_path
+
+
 def get_music_folder():
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders")
         music_folder, _ = winreg.QueryValueEx(key, "My Music")
-        music_folder = Path(music_folder)
-        loop = True
-        while loop:
-            dir_num = 0
-            last_dir = None
-            for i in music_folder.iterdir():
-                if i.is_file() and filetype.is_audio(i):
-                    loop = False
-                    break
-                elif i.is_dir():
-                    dir_num += 1
-                    if dir_num > 1:
-                        loop = False
-                        break
-                    last_dir = i
-            if loop and dir_num == 1:
-                music_folder = last_dir
+        music_folder = get_follow_folder(Path(music_folder))
         return QtCore.QUrl(f"file:///{str(music_folder).replace('\\', '/')}")
     except Exception:
         return ''
@@ -420,13 +461,44 @@ class MediaFrame(QtWidgets.QFrame):
 
 
 class PlayList(object):
-    def __init__(self, player: MyMediaPlayer):
-        self.index = 0
-        self.playlist: list[Media] = []
-        self.playlist_random: list[Media] = []
+    def __init__(self, player: MyMediaPlayer, index=0, play_mode=0, music_list=None):
+        if music_list is None:
+            music_list = []
+        self._index = index
+        self.playlist: list[Media] = [Media(Path(i)) for i in music_list]
+        if play_mode == 1:
+            self.playlist_random: list[Media] = self.playlist.copy()
+        else:
+            self.playlist_random: list[Media] = []
         self.player = player
-        self.play_mode = 0
+        self.play_mode = play_mode
         executor.submit(self.duplicate_removal)
+        if music_list:
+            QtCore.QTimer.singleShot(500, lambda: self.batch_processing())
+
+    # 批处理
+    def batch_processing(self):
+        if self.play_mode == 1:
+            self.set_index(self.playlist_random[self.index])
+            media_list = self.playlist_random.copy()
+        else:
+            self.set_index(self.playlist[self.index])
+            media_list = self.playlist.copy()
+        for media in media_list[::-1]:
+            cover_path = cover_cache_path.joinpath(media.cover_source, f'{media.hash_md5}.cover')
+            if cover_path.exists():
+                main_window.playlist_widget.add_media(media, QtGui.QPixmap(cover_path), index=0)
+            else:
+                main_window.playlist_widget.add_media(media, index=0)
+        main_window.playlist_widget.isNormalShow = False
+        main_window.playlist_widget.show()
+        main_window.playlist_widget.isNormalShow = True
+        main_window.playlist_widget.hide()
+        try:
+            media_frame: MediaFrame = main_window.playlist_widget.playlist_layout.itemAt(self.index).widget()
+            main_window.playlist_widget.SetScrollBarValue(media_frame.frameGeometry().top())
+        except:
+            pass
 
     def duplicate_removal(self):
         _PlayListLen = 0
@@ -443,6 +515,7 @@ class PlayList(object):
                     playlist = self.playlist
                 media_list = playlist.copy()
                 playlist.clear()
+                music_files = []
                 hash_md5 = []
                 for index, media in enumerate(media_list):
                     if close_thread:
@@ -451,6 +524,8 @@ class PlayList(object):
                     if media_hash_md5 not in hash_md5:
                         hash_md5.append(media_hash_md5)
                         playlist.append(media)
+                        music_files.append(str(media.path))
+                write_status('files', music_files)
                 main_window.run_function.emit(lambda: main_window.playlist_widget.add_file_button.setEnabled(True))
                 main_window.run_function.emit(lambda: main_window.playlist_widget.add_folder_button.setEnabled(True))
             time.sleep(0.1)
@@ -516,7 +591,12 @@ class PlayList(object):
                     index = 0
             self.playlist.insert(index, media)
         else:
+            media_path = get_follow_folder(media_path)
             media_list = [Media(i) for i in media_path.iterdir() if i.is_file() and filetype.is_audio(i)]
+            if not media_list:
+                main_window.playlist_widget.add_folder_button.setEnabled(True)
+                main_window.playlist_widget.add_file_button.setEnabled(True)
+                return
             for media in media_list[::-1]:
                 cover_path = cover_cache_path.joinpath(media.cover_source, f'{media.hash_md5}.cover')
                 if cover_path.exists():
@@ -570,6 +650,15 @@ class PlayList(object):
         if self.index >= len(self.playlist):
             self.index = 0
         self.play()
+
+    @property
+    def index(self):
+        return self._index
+
+    @index.setter
+    def index(self, index):
+        write_status('index', index)
+        self._index = index
 
 
 class MyPlaylist(QtWidgets.QFrame):
@@ -902,8 +991,10 @@ class MainWindow(QtWidgets.QMainWindow):
     run_function = QtCore.Signal(object)
     def __init__(self):
         super().__init__()
+        status_info: dict[str, list|str] = eval(open(status_cache_path, "r", encoding="utf-8").read())
         self.edge = None
-        self.position = 0
+        self.position = status_info["position"]
+        self.renew_position_times = 0
         self.last_row = -1
         self.music_info = dict()
         self.media: Media = None
@@ -922,9 +1013,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self.player = MyMediaPlayer(self)
         self.audio_output = QtMultimedia.QAudioOutput()
-        self.audio_output.setVolume(0.2)
+        self.audio_output.setVolume(status_info["volume"]/100)
         self.player.setAudioOutput(self.audio_output)
-        self.playlist = PlayList(self.player)
+        self.playlist = PlayList(self.player, status_info["index"], status_info["play_mode"], status_info["files"])
         self.lyrics_time = []
         self.last_lyrics_label: QtWidgets.QLabel = None
         self.last_MediaFrame: MediaFrame = None
@@ -1009,7 +1100,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.function_layout = QtWidgets.QHBoxLayout()
         self.play_mode_button = MyPushButton()
         self.play_mode_button.setIconSize(QtCore.QSize(30, 30))
-        self.play_mode_button.setIcon(self.resource.repeat)
+        # self.play_mode_button.setIcon(self.resource.repeat)
         self.function_layout.addWidget(self.play_mode_button)
         self.volume_button = MyPushButton()
         self.volume_button.setIconSize(QtCore.QSize(30, 30))
@@ -1029,7 +1120,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.volume_widget.setMinimum(0)
         self.volume_widget.setMaximum(100)
         self.volume_widget.setMaximumWidth(self.volume_widget.sizeHint().width())
-        self.volume_widget.setValue(20)
+        self.volume_widget.setValue(status_info['volume'])
         # self.volume_widget.valueChanged.connect(lambda value: (self.audio_output.setVolume(value / 100), self.volume_button.setIcon(self.resource.volume_high if value > 60 else self.resource.volume_medium if value > 30 else self.resource.volume_low)))
         self.volume_widget.hide()
         self.volume_animation_pos = QtCore.QPropertyAnimation(self.volume_widget, b'pos')
@@ -1065,7 +1156,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.prev_button.setToolTip('上一首')
         self.play_button.setToolTip('播放/暂停')
         self.next_button.setToolTip('下一首')
-        self.play_mode_button.setToolTip('循环播放')
+        # self.play_mode_button.setToolTip('循环播放')
+        if not self.playlist.play_mode:
+            self.play_mode_button.setIcon(self.resource.repeat)
+            self.play_mode_button.setToolTip('循环播放')
+        elif self.playlist.play_mode == 1:
+            self.play_mode_button.setIcon(self.resource.random)
+            self.play_mode_button.setToolTip('随机播放')
+        elif self.playlist.play_mode == 2:
+            self.play_mode_button.setIcon(self.resource.repeat_once)
+            self.play_mode_button.setToolTip('单曲循环')
         self.volume_button.setToolTip(f'音量:{self.audio_output.volume() * 100:.0f}')
         self.play_list_button.setToolTip('播放列表')
         self.adjustSize()
@@ -1073,8 +1173,14 @@ class MainWindow(QtWidgets.QMainWindow):
         # QtCore.QTimer.singleShot(10, lambda: self.playlist.add_media_from_file(Path('E:/Music/网易云音乐/我喜欢的音乐')))
 
     def renew_data(self):
+        if self.position:
+            self.player.setPosition(self.position)
+            self.position = 0
         position = self.player.position()
-        self.position = position
+        self.renew_position_times += 1
+        if self.renew_position_times >= 15:
+            self.renew_position_times = 0
+            write_status("position", position)
         self.play_progress.setValue(position)
         self.play_time_label.setText(QtCore.QTime(0, 0, 0).addSecs(position // 1000).toString('hh:mm:ss'))
         self.remain_time_label.setText(QtCore.QTime(0, 0, 0).addSecs((self.play_progress.maximum() - position) // 1000).toString('hh:mm:ss'))
@@ -1139,6 +1245,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.playlist.play_mode += 1
         if self.playlist.play_mode == 3:
             self.playlist.play_mode = 0
+        write_status("play_mode", self.playlist.play_mode)
         if not self.playlist.play_mode:
             self.play_mode_button.setIcon(self.resource.repeat)
             self.play_mode_button.setToolTip('循环播放')
@@ -1363,6 +1470,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def volume_changed(self, value: float):
         self.volume_button.setToolTip(f'音量:{value * 100:.0f}')
+        write_status('volume', int(value*100))
         if value > 0.59:
             self.volume_button.setIcon(self.resource.volume_high)
         elif value > 0.29:
@@ -1561,11 +1669,13 @@ class MainWindow(QtWidgets.QMainWindow):
 __file__ = Path(sys.argv[0]).resolve()
 data_exchange_queue = queue.Queue(maxsize=100)
 cpu_count = psutil.cpu_count()
-executor = ThreadPoolExecutor(max_workers=cpu_count)
-# playlist_executor = ThreadPoolExecutor(max_workers=(cpu_count//2 if cpu_count//2 > 4 else 4))
-playlist_executor = ThreadPoolExecutor(max_workers=4)
+executor = ThreadPoolExecutor(max_workers=cpu_count//2)
+playlist_executor = ThreadPoolExecutor(max_workers=(cpu_count//2 if cpu_count//2 > 4 else 4))  # 如果卡顿就用下边这个
+# playlist_executor = ThreadPoolExecutor(max_workers=4)
 all_executor_threads: list[futures.Future] = []
 close_thread = False
+status_cache_path = Path(__file__).parent.joinpath('status.cache')
+write_status('normal')
 media_info_cache_path = Path(__file__).parent.joinpath('media_info')
 cover_cache_path = Path(__file__).parent.joinpath('cover')
 lyrics_cache_path = Path(__file__).parent.joinpath('lyrics')
