@@ -1,0 +1,4 @@
+psutil
+filetype
+mutagen
+PySide6
