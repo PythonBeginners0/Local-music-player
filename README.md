@@ -26,7 +26,7 @@
 We welcome developers to help improve this project! Here's how you can contribute:
 
 1. **Report Issues**  
-   Found a bug? [Open an issue]([https://github.com/yourusername/reponame/issues](https://github.com/PythonBeginners0/Local-music-player/issues)) with:
+   Found a bug? [Open an issue](https://github.com/PythonBeginners0/Local-music-player/issues) with:
    - Platform name (NetEase/KuGou/Kuwo)
    - Error logs
    - Sample file details
