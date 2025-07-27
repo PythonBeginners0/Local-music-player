@@ -35,16 +35,14 @@ pip install -r requirements.txt
 ### Usage
 > python.exe 播放器界面.py
 
-
-
 ## 🤝 Contributing
 **Special note from developer**:  
 > As a high school senior with limited maintenance time, I welcome experienced contributors to help improve this project!
 
 ### How to contribute:
 1. **Report issues** → [Open new Issue](https://github.com/PythonBeginners0/Local-music-player/issues)
-2. **Improve crawlers** → Submit PRs to [`/crawlers`](https://github.com/PythonBeginners0/Local-music-player/tree/main/crawlers) directory
-3. **Enhance UI** → Modify [`/ui_templates`](https://github.com/PythonBeginners0/Local-music-player/tree/main/ui_templates)
+2. **Improve crawlers** → Submit PRs to [`/get_music_info.py`](https://github.com/PythonBeginners0/Local-music-player/tree/main/crawlers) directory
+3. **Enhance UI** → Modify [`/播放器界面.py`](https://github.com/PythonBeginners0/Local-music-player/tree/main/ui_templates)
 
 ### Priority areas:
 - [ ] Add QQ Music support
