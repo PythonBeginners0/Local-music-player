@@ -1,7 +1,9 @@
 import re
 import sys
 import time
+import json
 import queue
+import socket
 import winreg
 import psutil
 import random
@@ -43,29 +45,135 @@ def calculate_md5(file_path: Path, chunk_size=8192):
     return hash_md5.hexdigest()
 
 
+def handle_player_control_command(command: str, client_socket):
+    print(command)
+    data = json.loads(command)
+    success = True
+    mode = data['mode']
+    try:
+        if mode == 'get_status':
+            content = f"播放状态:{'播放中' if main_window.player.isPlaying() else '已暂停'},播放模式:{main_window.play_mode_button.toolTip()},当前播放的内容:<{main_window.media.title} - {main_window.media.artist}>,音量:{main_window.audio_output.volume()}"
+        elif mode == 'get_playlist_info':
+            content = f'当前播放列表有{len(main_window.playlist.playlist)}首歌曲,播放模式:{main_window.play_mode_button.toolTip()},当前正在播放<{main_window.media.title} - {main_window.media.artist}>,列表歌曲为{";".join(f"{i[0]+1}.<{i[1].title} - {i[1].artist}>" for i in zip(range(len(main_window.playlist.playlist_random if main_window.playlist.play_mode == 1 else main_window.playlist.playlist)), (main_window.playlist.playlist_random if main_window.playlist.play_mode == 1 else main_window.playlist.playlist)))}'
+        elif mode == 'play':
+            main_window.player.play()
+            content = f'正在播放<{main_window.media.title} - {main_window.media.artist}>'
+        elif mode == 'pause':
+            main_window.player.pause()
+            content = f'已暂停播放<{main_window.media.title} - {main_window.media.artist}>'
+        elif mode == 'next':
+            main_window.playlist.next()
+            content = f'已切换到下一首歌曲:<{main_window.media.title} - {main_window.media.artist}>'
+        elif mode == 'previous':
+            main_window.playlist.previous()
+            content = f'已切换到上一首歌曲:<{main_window.media.title} - {main_window.media.artist}>'
+        elif mode == 'get_volume':
+            content = f'当前音量:{main_window.volume_widget.value()}'
+        elif mode == 'set_volume':
+            volume = int(data['args'])
+            print(volume)
+            if 0 <= volume <= 100:
+                main_window.audio_output.setVolume(volume / 100)
+                main_window.volume_widget.setValue(volume)
+                main_window.volume_button.setToolTip(f'音量:{int(main_window.audio_output.volume() * 100):.0f}')
+                content = f'已将设置音量为{main_window.volume_widget.value()}'
+            else:
+                content = '音量设置失败,请输入0-100的数字'
+                success = False
+        elif mode == 'get_play_mode':
+            content = f'当前播放模式:{main_window.play_mode_button.toolTip()}'
+        elif mode == 'set_play_mode':
+            play_mode = int(data['args'])
+            if 0 <= play_mode <= 2:
+                play_mode -= 1
+                if play_mode < -1:
+                    main_window.playlist.play_mode = 1
+                else:
+                    main_window.playlist.play_mode = play_mode
+                main_window.play_mode_button.click()
+                content = f'已切换播放模式为:{main_window.play_mode_button.toolTip()}'
+            else:
+                content = '播放模式设置失败,请输入0-2的数字'
+                success = False
+        elif mode == 'set_media':
+            music_title, music_artist, music_album = data['args']
+            Multiple_ratio = (3, 2 if music_artist != '未知艺术家' else 0, 1 if music_album != '未知专辑' else 0)
+            get_best_similarity = lambda n: sum(map(lambda x, y: x * y, (Similarity(music_title, n.title), Similarity(music_artist, n.artist), Similarity(music_album, n.album)), Multiple_ratio))
+            media = max(main_window.playlist.playlist_random, key=get_best_similarity) if main_window.playlist.play_mode == 1 else max(main_window.playlist.playlist, key=get_best_similarity)
+            main_window.playlist.set_index(media)
+            content = f'已切换到歌曲:<{main_window.media.title} - {main_window.media.artist}>'
+        elif mode == 'set_media_index':
+            if 0 < int(data['args']) <= len(main_window.playlist.playlist):
+                media: Media = main_window.playlist.playlist_random[int(data['args']) - 1] if main_window.playlist.play_mode == 1 else main_window.playlist.playlist[int(data['args']) - 1]
+                main_window.playlist.set_index(media)
+                content = f'已切换到歌曲:<{media.title} - {media.artist}>'
+            else:
+                content = '无效的索引'
+                success = False
+        else:
+            content = '无效的指令'
+    except Exception as e:
+        success = False
+        content = f'指令执行失败,错误原因<{e}>'
+    client_socket.send(json.dumps({'success': success, 'result': content}).encode('utf-8'))
+
+
+# 本地接口使用socket控制,主要适用于小智AI的控制
+def socket_server():
+    # 创建TCP socket
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # 设置端口复用
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # 绑定IP和端口
+    server_socket.bind(('127.0.0.1', 8888))
+    # 开始监听
+    server_socket.listen(1)
+    print("服务端已启动")
+    while not close_thread:
+        try:
+            # 接受客户端连接
+            client_socket, client_address = server_socket.accept()
+            try:
+                while True:
+                    # 接收客户端消息
+                    data = client_socket.recv(8192)
+                    if not data:
+                        break
+                    main_window.run_function.emit(lambda: handle_player_control_command(data.decode('utf-8'), client_socket))
+            except ConnectionResetError:
+                pass
+            finally:
+                client_socket.close()
+        except Exception as e:
+            print(f"发生错误: {e}")
+            time.sleep(0.5)
+    server_socket.close()
+
+
 def write_status(status: str='normal', args=None):
-    normal_status_dict = "{'files': [], 'index': 0, 'volume': 30, 'play_mode': 0, 'position': 0}"
+    normal_status_dict = '{"files": {"playlist": [], "playlist_random": []}, "index": 0, "volume": 30, "play_mode": 0, "position": 0}'
     status_dict = {}
     loop = False
     try:
-        status_dict = eval(open(status_cache_path, 'r', encoding='utf-8').read())
+        status_dict = json.loads(open(status_cache_path, 'r', encoding='utf-8').read())
         if not isinstance(status_dict, dict):
             loop = True
         for i in ('files', 'index', 'volume', 'play_mode', 'position'):
             if i not in status_dict:
                 loop = True
-        if not isinstance(status_dict['files'], list) and not loop:
+        if (not isinstance(status_dict['files'], dict) or 'playlist' not in status_dict['files'] or 'playlist_random' not in status_dict['files'] or not isinstance(status_dict['files']['playlist'], list) or not isinstance(status_dict['files']['playlist_random'], list)) and not loop:
             loop = True
     except Exception as e:
         print(e)
         loop = True
     if loop:
-        open(status_cache_path, 'w', encoding='utf-8').write(normal_status_dict)
-        status_dict = eval(normal_status_dict)
+        status_dict = json.loads(normal_status_dict)
+        with open(status_cache_path, 'w', encoding='utf-8') as file:
+            json.dump(status_dict, file, ensure_ascii=False, indent=4)
     if status == 'normal':
         return
     elif status == 'files':
-        status_dict['files'] = args
+        status_dict['files'][args[0]] = args[1:]
     elif status == 'index':
         status_dict['index'] = args
     elif status == 'volume':
@@ -77,7 +185,7 @@ def write_status(status: str='normal', args=None):
     else:
         return
     with open(status_cache_path, 'w', encoding='utf-8') as file:
-        file.write(str(status_dict))
+        json.dump(status_dict, file, ensure_ascii=False, indent=4)
 
 
 def get_follow_folder(folder_path: Path):
@@ -278,14 +386,14 @@ def get_music_info(music: Media):
                     break
             else:
                 data_exchange_queue.put(result_data)
-                time.sleep(0.1)
+                time.sleep(0.01)
         Multiple_ratio = (3, 2 if music_artist != '未知艺术家' else 0, 1 if music_album != '未知专辑' else 0)
         get_best_similarity = lambda n: sum(map(lambda x, y: x * y, (Similarity(search_info, n['name']), Similarity(music_artist, n['artist']), Similarity(music_album, n['album'])), Multiple_ratio)) - abs(music.duration - int(n['duration']))
         try:
             result = (max(netease_results, key=get_best_similarity), max(kugou_results, key=get_best_similarity), max(kuwo_results, key=get_best_similarity), music.hash_md5)
+            return result
         except Exception:
-            continue
-        return result
+            pass
 
 
 class ThreadPoolExecutor(futures.ThreadPoolExecutor):
@@ -358,9 +466,11 @@ class MediaFrame(QtWidgets.QFrame):
         super(MediaFrame, self).__init__(*args, **kwargs)
         self.setObjectName('MediaFrame')
         self.media = media
-        self.resource: Resource = self.parent().resource
-        self.playlist_widget: QtWidgets.QWidget = self.parent().playlist_widget
-        self.playlist: PlayList = self.parent().parent().playlist
+        self._parent: MyPlaylist = self.parent()
+        self.resource: Resource = self._parent.resource
+        self.playlist_widget: QtWidgets.QWidget = self._parent.playlist_widget
+        __main_window: MainWindow = self._parent.parent()
+        self.playlist: PlayList = __main_window.playlist
         self.main_layout = QtWidgets.QHBoxLayout(self)
         self.main_layout.setContentsMargins(2, 2, 2, 2)
         self.InfoLayout = QtWidgets.QHBoxLayout(self)
@@ -443,7 +553,7 @@ class MediaFrame(QtWidgets.QFrame):
 
     def enterEvent(self, event: QtGui.QEnterEvent):
         super().enterEvent(event)
-        self.parent().setFocus()
+        self._parent.setFocus()
         if not self.isPlaying:
             self.setStyleSheet('QFrame#MediaFrame{border-radius: 4px;border: 2px solid #346792;}')
             self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -452,7 +562,7 @@ class MediaFrame(QtWidgets.QFrame):
 
     def leaveEvent(self, event: QtCore.QEvent):
         super().leaveEvent(event)
-        self.parent().setFocus()
+        self._parent.setFocus()
         if not self.isPlaying:
             self.setStyleSheet('')
             self.main_layout.setContentsMargins(2, 2, 2, 2)
@@ -463,17 +573,20 @@ class MediaFrame(QtWidgets.QFrame):
 class PlayList(object):
     def __init__(self, player: MyMediaPlayer, index=0, play_mode=0, music_list=None):
         if music_list is None:
-            music_list = []
+            music_list = {'playlist': [], 'playlist_random': []}
         self._index = index
-        self.playlist: list[Media] = [Media(Path(i)) for i in music_list]
+        self.playlist: list[Media] = [Media(Path(i)) for i in music_list['playlist']]
+        self.playlist_random: list[Media] = []
         if play_mode == 1:
-            self.playlist_random: list[Media] = self.playlist.copy()
-        else:
-            self.playlist_random: list[Media] = []
+            # self.playlist_random = sorted(self.playlist, key=lambda x: music_list['playlist_random'].index(str(x.path)))  # 已废用没有下边这个代码执行的快
+            # for i in music_list['playlist_random']:
+            #     self.playlist_random.append(self.playlist[music_list['playlist'].index(i)])  # 已废用没有下边这个代码执行的快
+            index_map = {v: i for i, v in enumerate(music_list['playlist_random'])}
+            self.playlist_random = sorted(self.playlist, key=lambda x: index_map[str(x.path)])
         self.player = player
         self.play_mode = play_mode
         executor.submit(self.duplicate_removal)
-        if music_list:
+        if music_list['playlist'] or music_list['playlist_random']:
             QtCore.QTimer.singleShot(500, lambda: self.batch_processing())
 
     # 批处理
@@ -517,7 +630,7 @@ class PlayList(object):
                 playlist.clear()
                 music_files = []
                 hash_md5 = []
-                for index, media in enumerate(media_list):
+                for media in media_list:
                     if close_thread:
                         break
                     media_hash_md5 = media.hash_md5
@@ -525,7 +638,11 @@ class PlayList(object):
                         hash_md5.append(media_hash_md5)
                         playlist.append(media)
                         music_files.append(str(media.path))
-                write_status('files', music_files)
+                if self.play_mode == 1:
+                    write_status('files', ['playlist'] + [str(i.path) for i in self.playlist])
+                    write_status('files', ['playlist_random'] + music_files)
+                else:
+                    write_status('files', ['playlist'] + music_files)
                 main_window.run_function.emit(lambda: main_window.playlist_widget.add_file_button.setEnabled(True))
                 main_window.run_function.emit(lambda: main_window.playlist_widget.add_folder_button.setEnabled(True))
             time.sleep(0.1)
@@ -666,7 +783,8 @@ class MyPlaylist(QtWidgets.QFrame):
     def __init__(self, *args, **kwargs):
         super(MyPlaylist, self).__init__(*args, **kwargs)
         self.isNormalShow = True
-        self.resource: Resource = self.parent().resource
+        self._parent: MainWindow = self.parent()
+        self.resource: Resource = self._parent.resource
         self.setObjectName('PlayListFrame')
         self.setStyleSheet('QFrame#PlayListFrame{background-color: #19232D;border-radius: 4px;border: 1px solid #455364;}QWidget#PlayListWidget{background-color: #19232D}')
         self.run_function.connect(lambda function: function())
@@ -762,7 +880,7 @@ class MyPlaylist(QtWidgets.QFrame):
         file_dialog.setNameFilter('音频文件 (*.mp3 *.wav *.flac)')
         if file_dialog.exec():
             for file_path in file_dialog.selectedFiles():
-                self.parent().playlist.add_media_from_file(Path(file_path))
+                self._parent.playlist.add_media_from_file(Path(file_path))
         self.show_timer.start()
 
     def add_folder_button_clicked(self):
@@ -772,7 +890,7 @@ class MyPlaylist(QtWidgets.QFrame):
         folder_dialog.setDirectoryUrl(get_music_folder())
         if folder_dialog.exec():
             folder_path = Path(folder_dialog.selectedFiles()[0])
-            self.parent().playlist.add_media_from_file(Path(folder_path))
+            self._parent.playlist.add_media_from_file(Path(folder_path))
         self.show_timer.start()
 
     def showEvent(self, event: QtGui.QShowEvent):
@@ -850,7 +968,8 @@ class SongCoverLabel(QtWidgets.QLabel):
     def __init__(self, *args, **kwargs):
         super(SongCoverLabel, self).__init__(*args, **kwargs)
         # self.cover_source = 'netease'
-        self.song_cover_pixmap = QtGui.QPixmap(self.parent().resource.no_song_cover)
+        self._parent: MainWindow = self.parent()
+        self.song_cover_pixmap = QtGui.QPixmap(self._parent.resource.no_song_cover)
         self.right_button_menu = QtWidgets.QMenu(self)
         self.netease_action = QtGui.QAction('网易云音乐', self)
         self.netease_action.setObjectName('netease')
@@ -991,7 +1110,7 @@ class MainWindow(QtWidgets.QMainWindow):
     run_function = QtCore.Signal(object)
     def __init__(self):
         super().__init__()
-        status_info: dict[str, list|str] = eval(open(status_cache_path, "r", encoding="utf-8").read())
+        status_info: dict[str, list|str|dict[str,list]] = eval(open(status_cache_path, "r", encoding="utf-8").read())
         self.edge = None
         self.position = status_info["position"]
         self.renew_position_times = 0
@@ -1027,7 +1146,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.main_widget.setMouseTracking(True)
         self.main_layout = QtWidgets.QGridLayout()
         for i in zip(range(5), (0, 15, 15, 0, 5)):
-            self.main_layout.setRowStretch(*i)
+            self.main_layout.setRowStretch(i[0], i[1])
         self.window_info_layout = QtWidgets.QHBoxLayout()
         self.window_title_label = QtWidgets.QLabel('本地音乐播放器')
         font = QtGui.QFont('微软雅黑', 10)
@@ -1166,7 +1285,7 @@ class MainWindow(QtWidgets.QMainWindow):
         elif self.playlist.play_mode == 2:
             self.play_mode_button.setIcon(self.resource.repeat_once)
             self.play_mode_button.setToolTip('单曲循环')
-        self.volume_button.setToolTip(f'音量:{self.audio_output.volume() * 100:.0f}')
+        self.volume_button.setToolTip(f'音量:{int(self.audio_output.volume() * 100):.0f}')
         self.play_list_button.setToolTip('播放列表')
         self.adjustSize()
         self.load_lyrics(((0, '歌曲歌词'),))
@@ -1254,6 +1373,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.play_mode_button.setToolTip('随机播放')
             self.playlist.playlist_random = self.playlist.playlist.copy()
             random.shuffle(self.playlist.playlist_random)
+            write_status('files', ['playlist_random'] + [str(i.path) for i in self.playlist.playlist_random])
             if self.playlist.playlist_random:
                 self.playlist.index = self.playlist.playlist_random.index(self.media)
             playlist_widget = tuple(self.playlist_widget.playlist_layout.itemAt(i) for i in range(self.playlist_widget.playlist_layout.count()))
@@ -1693,4 +1813,5 @@ pixels_per_px = app.primaryScreen().devicePixelRatio() ** 2
 main_window = MainWindow()
 main_window.setWindowIcon(Resource().music_app_icon)
 main_window.show()
+threading.Thread(target=socket_server, daemon=True).start()
 sys.exit(app.exec())
