@@ -1,38 +1,65 @@
-# Local Music Metadata Fetcher
+# Local Music Player 🎵
+> Play local music while fetching lyrics and covers from NetEase/KuGou/Kuwo
 
+[![Version](https://img.shields.io/badge/Release-v1.0-blue)](https://github.com/PythonBeginners0/Local-music-player/releases)
+[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/PythonBeginners0/Local-music-player/blob/main/LICENSE)
+[![Issues](https://img.shields.io/github/issues/PythonBeginners0/Local-music-player)](https://github.com/PythonBeginners0/Local-music-player/issues)
 [![GitHub Issues](https://img.shields.io/github/issues/yourusername/reponame?color=critical)](https://github.com/yourusername/reponame/issues)
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://python.org)
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
-> Fetches metadata for local music files from major Chinese music platforms
+<p align="center">
+  <img src="https://github.com/PythonBeginners0/Local-music-player/blob/main/Player%20Preview.png" alt="Player Preview" width="70%">
+</p>
 
 ## ✨ Features
-- **Multi-platform support**: Retrieves song covers and lyrics from:
-  - NetEase Cloud Music (网易云音乐)
-  - KuGou Music (酷狗音乐)
-  - Kuwo Music (酷我音乐)
-- **Interactive UI**:
-  - Right-click on cover/lyrics areas to toggle displays
-  - Automatic metadata matching by local file name
+- ✅ **Smart metadata fetching**  
+  Auto-retrieves **song covers & lyrics** from:
+  - NetEase Cloud Music
+  - KuGou Music
+  - Kuwo Music
+  
+- 🖱️ **Interactive controls**  
+  Right-click on lyrics/cover areas to switch displays
+  
+- 🔌 **Extensible crawler**  
+  Real-time updates for music platform compatibility
 
-## 👨‍💻 Project Status
-> **Maintainer Note**  
-> As a full-time undergraduate student with limited maintenance capacity, this project benefits from community contributions. Current priorities:
-> - 🐛 Bug fixes for metadata fetching
-> - 🔄 Platform API updates
-> - 🚀 Performance optimizations
+## 🚀 Getting Started
+### Prerequisites
+- Python 3.10+
+- Install dependencies:
+pip install -r requirements.txt
 
-## 🤝 How to Contribute
-We welcome developers to help improve this project! Here's how you can contribute:
 
-1. **Report Issues**  
-   Found a bug? [Open an issue](https://github.com/yourusername/reponame/issues) with:
-   - Platform name (NetEase/KuGou/Kuwo)
-   - Error logs
-   - Sample file details
+### Usage
+> python.exe 播放器界面.py
 
-2. **Improve Crawlers**  
-   Help maintain up-to-date platform parsers:
-   ```bash
-   git checkout -b feature/kuwo-api-update
-   # Modify crawlers/kuwo_parser.py
+
+
+## 🤝 Contributing
+**Special note from developer**:  
+> As a high school senior with limited maintenance time, I welcome experienced contributors to help improve this project!
+
+### How to contribute:
+1. **Report issues** → [Open new Issue](https://github.com/PythonBeginners0/Local-music-player/issues)
+2. **Improve crawlers** → Submit PRs to [`/crawlers`](https://github.com/PythonBeginners0/Local-music-player/tree/main/crawlers) directory
+3. **Enhance UI** → Modify [`/ui_templates`](https://github.com/PythonBeginners0/Local-music-player/tree/main/ui_templates)
+
+### Priority areas:
+- [ ] Add QQ Music support
+- [x] Basic NetEase crawler
+- [ ] Automatic metadata matching
+- [ ] Dark mode implementation
+
+## 📜 License
+Distributed under MIT License. See [LICENSE](https://github.com/PythonBeginners0/Local-music-player/blob/main/LICENSE) for details.
+
+---
+
+## 👨💻 Developer
+**High school student developer**  
+[![Email](https://img.shields.io/badge/Contact-Email-blue?logo=gmail)](mailto:your_email@example.com)
+[![GitHub](https://img.shields.io/badge/Follow-GitHub-black?logo=github)](https://github.com/PythonBeginners0)
+
+> Project Link: https://github.com/PythonBeginners0/Local-music-player
