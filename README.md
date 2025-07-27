@@ -41,8 +41,8 @@ pip install -r requirements.txt
 
 ### How to contribute:
 1. **Report issues** → [Open new Issue](https://github.com/PythonBeginners0/Local-music-player/issues)
-2. **Improve crawlers** → Submit PRs to [`/get_music_info.py`](https://github.com/PythonBeginners0/Local-music-player/tree/main/crawlers) directory
-3. **Enhance UI** → Modify [`/播放器界面.py`](https://github.com/PythonBeginners0/Local-music-player/tree/main/ui_templates)
+2. **Improve crawlers** → Submit PRs to [`/get_music_info.py`](https://github.com/PythonBeginners0/Local-music-player/get_music_info.py)
+3. **Enhance UI** → Modify [`/播放器界面.py`](https://github.com/PythonBeginners0/Local-music-player/播放器界面.py)
 
 ### Priority areas:
 - [ ] Add QQ Music support
