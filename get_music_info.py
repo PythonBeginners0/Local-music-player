@@ -221,7 +221,6 @@ class NetEaseMusic(object):
         data_exchange_queue.put(music_info)
 
     def get_lyrics(self, song_id):
-        """使用您已有的歌词解析逻辑"""
         url = 'https://music.163.com/api/song/lyric'
         time_compile = re.compile(r'\[(\d*:?\d+:\d+\.*\d*)] *')
         lyrics = request(url=url, data={"id": song_id, "lv": -1, "kv": -1, "tv": -1, }, headers=self.headers, method='POST').json()['lrc']['lyric']
@@ -229,7 +228,6 @@ class NetEaseMusic(object):
         return lyrics_tuple
 
     def get_cover(self, cover_url: str):
-        """使用您已有的封面处理逻辑"""
         cover_response = request(url=cover_url, method='GET')
         return resize_image(cover_response.content)
 
@@ -257,7 +255,6 @@ class KuGouMusic(object):
             self.cookie_dict[co_list[0]] = co_list[1]
 
     def get_html(self, url):
-        # 加一个cookie
         cookie = 'kg_mid=68aa6f0242d4192a2a9e2b91e44c226d; kg_dfid=4DoTYZ0DYq9M3ctVHp0cBghm; kg_dfid_collect=d41d8cd98f00b204e9800998ecf8427e; Hm_lvt_aedee6983d4cfc62f509129360d6bb3d=1618922741,1618923483; Hm_lpvt_aedee6983d4cfc62f509129360d6bb3d=1618924198'.split('; ')
         cookie_dict = {}
         for co in cookie:
@@ -325,7 +322,6 @@ class KuGouMusic(object):
     #     return url
 
     # 手机浏览器网页歌词获取
-    # def get_lyrics_url(self, song_title, song_hash: str, song_length: int):
     def get_lyrics_url(self, song_hash: str):
         k = int(round(time.time() * 1000))
         # params = {
