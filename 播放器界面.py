@@ -5,6 +5,7 @@ import json
 import queue
 import socket
 import winreg
+import signal
 import psutil
 import random
 import hashlib
@@ -16,6 +17,18 @@ from concurrent import futures
 from resources import qInitResources
 from PySide6 import QtCore, QtGui, QtWidgets, QtMultimedia
 from get_music_info import KuGouMusic, KuWoMusic, NetEaseMusic
+
+
+# 强制关闭程序
+def force_exit():
+    time.sleep(3)
+    print("已强制关闭程序")
+    psutil.Process().terminate()
+
+
+def signal_handler(*args):
+    print(*args)
+    main_window.close()
 
 
 # def calculate_md5(file_path: Path):
@@ -46,13 +59,12 @@ def calculate_md5(file_path: Path, chunk_size=8192):
 
 
 def handle_player_control_command(command: str, client_socket):
-    print(command)
     data = json.loads(command)
     success = True
     mode = data['mode']
     try:
         if mode == 'get_status':
-            content = f"播放状态:{'播放中' if main_window.player.isPlaying() else '已暂停'},播放模式:{main_window.play_mode_button.toolTip()},当前播放的内容:<{main_window.media.title} - {main_window.media.artist}>,音量:{main_window.audio_output.volume()}"
+            content = f"播放状态:{'播放中' if main_window.player.isPlaying() else '已暂停'},播放模式:{main_window.play_mode_button.toolTip()},当前播放的内容:<{main_window.media.title} - {main_window.media.artist}>,音量:{main_window.volume_widget.value()}"
         elif mode == 'get_playlist_info':
             content = f'当前播放列表有{len(main_window.playlist.playlist)}首歌曲,播放模式:{main_window.play_mode_button.toolTip()},当前正在播放<{main_window.media.title} - {main_window.media.artist}>,列表歌曲为{";".join(f"{i[0]+1}.<{i[1].title} - {i[1].artist}>" for i in zip(range(len(main_window.playlist.playlist_random if main_window.playlist.play_mode == 1 else main_window.playlist.playlist)), (main_window.playlist.playlist_random if main_window.playlist.play_mode == 1 else main_window.playlist.playlist)))}'
         elif mode == 'play':
@@ -71,30 +83,23 @@ def handle_player_control_command(command: str, client_socket):
             content = f'当前音量:{main_window.volume_widget.value()}'
         elif mode == 'set_volume':
             volume = int(data['args'])
-            print(volume)
             if 0 <= volume <= 100:
                 main_window.audio_output.setVolume(volume / 100)
                 main_window.volume_widget.setValue(volume)
                 main_window.volume_button.setToolTip(f'音量:{int(main_window.audio_output.volume() * 100):.0f}')
                 content = f'已将设置音量为{main_window.volume_widget.value()}'
             else:
-                content = '音量设置失败,请输入0-100的数字'
-                success = False
+                raise ValueError('音量设置失败,请输入0-100的数字')
         elif mode == 'get_play_mode':
             content = f'当前播放模式:{main_window.play_mode_button.toolTip()}'
         elif mode == 'set_play_mode':
             play_mode = int(data['args'])
             if 0 <= play_mode <= 2:
-                play_mode -= 1
-                if play_mode < -1:
-                    main_window.playlist.play_mode = 1
-                else:
-                    main_window.playlist.play_mode = play_mode
-                main_window.play_mode_button.click()
+                main_window.playlist.play_mode = play_mode
+                main_window.play_mode_changed()
                 content = f'已切换播放模式为:{main_window.play_mode_button.toolTip()}'
             else:
-                content = '播放模式设置失败,请输入0-2的数字'
-                success = False
+                raise ValueError('播放模式设置失败,请输入0-2的数字')
         elif mode == 'set_media':
             music_title, music_artist, music_album = data['args']
             Multiple_ratio = (3, 2 if music_artist != '未知艺术家' else 0, 1 if music_album != '未知专辑' else 0)
@@ -108,8 +113,48 @@ def handle_player_control_command(command: str, client_socket):
                 main_window.playlist.set_index(media)
                 content = f'已切换到歌曲:<{media.title} - {media.artist}>'
             else:
-                content = '无效的索引'
-                success = False
+                raise ValueError('无效的索引')
+        elif mode == 'sort':
+            args = data['args']
+            if isinstance(args, str):
+                args = eval(args.replace('，', ','))
+            playlist_len = len(main_window.playlist.playlist)
+            if len(args) != playlist_len:
+                original = [i for i in range(1, playlist_len+1)]
+                for i in args[:-1]:
+                    original.remove(i)
+                if args[-1] == 'random':
+                    random.shuffle(original)
+                    args = args[:-1] + original
+                elif args[-1] == 'order':
+                    args = args[:-1] + original
+                else:
+                    raise ValueError(f'列表元素数量需为{playlist_len},而你传入的参数元素数为{len(args)},请检查参数,且输入的简化格式不对,列表最后一项只能为\'random\'或\'order\'')
+            if main_window.playlist.play_mode == 1:
+                playlist = main_window.playlist.playlist_random.copy()
+            else:
+                playlist = main_window.playlist.playlist.copy()
+            playlist_widget = tuple(main_window.playlist_widget.playlist_layout.itemAt(i) for i in range(main_window.playlist_widget.playlist_layout.count()))
+            main_window.playlist.play_mode = 1
+            write_status('play_mode', 1)
+            main_window.play_mode_button.setIcon(main_window.resource.random)
+            main_window.play_mode_button.setToolTip('随机播放')
+            main_window.playlist.playlist_random.clear()
+            music_files = []
+            for i in args:
+                i = int(i) - 1
+                media = playlist[i]
+                music_files.append(str(media.path))
+                main_window.playlist.playlist_random.append(media)
+                main_window.playlist_widget.playlist_layout.addWidget(playlist_widget[i].widget())
+            main_window.playlist.index = main_window.playlist.playlist_random.index(main_window.media)
+            main_window.playlist_widget.isNormalShow = False
+            main_window.playlist_widget.show()
+            main_window.playlist_widget.isNormalShow = True
+            main_window.playlist_widget.hide()
+            main_window.playlist_widget.move(main_window.geometry().bottomLeft() + QtCore.QPoint(0, -main_window.playlist_widget.height()))
+            write_status('files', ['playlist_random'] + music_files)
+            content = f'当前播放列表有{len(main_window.playlist.playlist)}首歌曲,播放模式:{main_window.play_mode_button.toolTip()},当前正在播放<{main_window.media.title} - {main_window.media.artist}>,列表歌曲为{";".join(f"{i[0]+1}.<{i[1].title} - {i[1].artist}>" for i in zip(range(len(main_window.playlist.playlist_random)), main_window.playlist.playlist_random))}'
         else:
             content = '无效的指令'
     except Exception as e:
@@ -151,6 +196,8 @@ def socket_server():
 
 
 def write_status(status: str='normal', args=None):
+    if cache_reading:
+        return
     normal_status_dict = '{"files": {"playlist": [], "playlist_random": []}, "index": 0, "volume": 30, "play_mode": 0, "position": 0}'
     status_dict = {}
     loop = False
@@ -184,8 +231,15 @@ def write_status(status: str='normal', args=None):
         status_dict['position'] = args
     else:
         return
-    with open(status_cache_path, 'w', encoding='utf-8') as file:
-        json.dump(status_dict, file, ensure_ascii=False, indent=4)
+    # print(f'状态<{status}>更新成功<{args}>')
+    try:
+        with open(status_cache_path, 'w', encoding='utf-8') as file:
+            json.dump(status_dict, file, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(e)
+        with open(status_cache_path, 'w', encoding='utf-8') as file:
+            json.dump(status_dict, file, ensure_ascii=False, indent=4)
+    return status_dict
 
 
 def get_follow_folder(folder_path: Path):
@@ -213,7 +267,9 @@ def get_music_folder():
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders")
         music_folder, _ = winreg.QueryValueEx(key, "My Music")
         music_folder = get_follow_folder(Path(music_folder))
-        return QtCore.QUrl(f"file:///{str(music_folder).replace('\\', '/')}")
+        music_folder = str(music_folder).replace('\\', '/')
+        # print(QtCore.QUrl(f"file:///{music_folder}"))
+        return QtCore.QUrl(f"file:///{music_folder}")
     except Exception:
         return ''
 
@@ -258,6 +314,14 @@ class Media(object):
         self.album = audio.get('album', ['未知专辑'])[0]
         self.duration = int(audio.info.length)
         self.media_info_path = media_info_cache_path.joinpath(f'{self.hash_md5}.info')
+        # 特定格式的处理
+        if filetype.guess(media_path).is_extension('mp3'):
+            audio = File(media_path)
+            self._lyrics = (lambda x: (x[0] if x else ''))(tuple(i[1].text for i in audio.tags.items() if 'USLT' in i[0] and i[1]))
+        elif 'lyrics' in audio:
+            self._lyrics = audio['lyrics'][0]
+        else:
+            self._lyrics = None
         try:
             media_info = eval(open(self.media_info_path, 'r', encoding='utf-8').read())
             if not isinstance(media_info, dict):
@@ -268,16 +332,10 @@ class Media(object):
                 media_info.update({'lyrics_source': 'local'})
         except Exception:
             media_info = {'cover_source': 'netease', 'lyrics_source': 'local'}
+        if media_info['lyrics_source'] == 'local' and self._lyrics is None:
+            media_info['lyrics_source'] = 'netease'
         self._cover_source = media_info['cover_source']
         self._lyrics_source = media_info['lyrics_source']
-        # 特定格式的处理
-        if filetype.guess(media_path).is_extension('mp3'):
-            audio = File(media_path)
-            self._lyrics = (lambda x: (x[0] if x else ''))(tuple(i[1].text for i in audio.tags.items() if 'USLT' in i[0] and i[1]))
-        elif 'lyrics' in audio:
-            self._lyrics = audio['lyrics'][0]
-        else:
-            self._lyrics = None
 
     @property
     def lyrics(self):
@@ -572,6 +630,7 @@ class MediaFrame(QtWidgets.QFrame):
 
 class PlayList(object):
     def __init__(self, player: MyMediaPlayer, index=0, play_mode=0, music_list=None):
+        global cache_reading
         if music_list is None:
             music_list = {'playlist': [], 'playlist_random': []}
         self._index = index
@@ -585,22 +644,28 @@ class PlayList(object):
             self.playlist_random = sorted(self.playlist, key=lambda x: index_map[str(x.path)])
         self.player = player
         self.play_mode = play_mode
-        executor.submit(self.duplicate_removal)
         if music_list['playlist'] or music_list['playlist_random']:
-            QtCore.QTimer.singleShot(500, lambda: self.batch_processing())
+            cache_reading = True
+            QtCore.QTimer.singleShot(500, self.init)
+        executor.submit(self.duplicate_removal)
 
-    # 批处理
-    def batch_processing(self):
+
+    # 初始化
+    def init(self):
+        global cache_reading
         if self.play_mode == 1:
             self.set_index(self.playlist_random[self.index])
             media_list = self.playlist_random.copy()
         else:
             self.set_index(self.playlist[self.index])
             media_list = self.playlist.copy()
+        time_batch = int(5000 / len(media_list))
+        times = 0
         for media in media_list[::-1]:
+            times += 1
             cover_path = cover_cache_path.joinpath(media.cover_source, f'{media.hash_md5}.cover')
             if cover_path.exists():
-                main_window.playlist_widget.add_media(media, QtGui.QPixmap(cover_path), index=0)
+                main_window.playlist_widget.add_media(media, cover_path, index=0, timeout=5000 - times * time_batch)
             else:
                 main_window.playlist_widget.add_media(media, index=0)
         main_window.playlist_widget.isNormalShow = False
@@ -612,6 +677,7 @@ class PlayList(object):
             main_window.playlist_widget.SetScrollBarValue(media_frame.frameGeometry().top())
         except:
             pass
+        cache_reading = False
 
     def duplicate_removal(self):
         _PlayListLen = 0
@@ -643,8 +709,9 @@ class PlayList(object):
                     write_status('files', ['playlist_random'] + music_files)
                 else:
                     write_status('files', ['playlist'] + music_files)
-                main_window.run_function.emit(lambda: main_window.playlist_widget.add_file_button.setEnabled(True))
-                main_window.run_function.emit(lambda: main_window.playlist_widget.add_folder_button.setEnabled(True))
+                if 'main_window' in globals():
+                    main_window.run_function.emit(lambda: main_window.playlist_widget.add_file_button.setEnabled(True))
+                    main_window.run_function.emit(lambda: main_window.playlist_widget.add_folder_button.setEnabled(True))
             time.sleep(0.1)
 
     def set_source(self, media: Media, play: bool = False):
@@ -714,10 +781,13 @@ class PlayList(object):
                 main_window.playlist_widget.add_folder_button.setEnabled(True)
                 main_window.playlist_widget.add_file_button.setEnabled(True)
                 return
+            time_batch = int(5000 / len(media_list))
+            times = 0
             for media in media_list[::-1]:
+                times += 1
                 cover_path = cover_cache_path.joinpath(media.cover_source, f'{media.hash_md5}.cover')
                 if cover_path.exists():
-                    main_window.playlist_widget.add_media(media, QtGui.QPixmap(cover_path), index=index)
+                    main_window.playlist_widget.add_media(media, cover_path, index=index, timeout=5000 - times * time_batch)
                 else:
                     main_window.playlist_widget.add_media(media, index=index)
             if self.play_mode == 1:
@@ -850,15 +920,18 @@ class MyPlaylist(QtWidgets.QFrame):
         self.scroll_bar_animation_value.setEndValue(value)
         self.scroll_bar_animation_value.start()
 
-    def add_media(self, media: Media, pixmap: QtGui.QPixmap=None, index=-1):
+    def add_media(self, media: Media, pixmap: QtGui.QPixmap|Path=None, index=-1, timeout=0):
         if index == -1:
             index = self.playlist_layout.count()
         frame = MediaFrame(media, self)
         if pixmap:
-            frame.setPixmap(pixmap)
+            if timeout and isinstance(pixmap, Path):
+                QtCore.QTimer.singleShot(timeout, lambda: frame.setPixmap(QtGui.QPixmap(pixmap)))
+            else:
+                frame.setPixmap(pixmap)
         self.playlist_layout.insertWidget(index, frame, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
         if pixmap is None:
-           playlist_executor.submit(main_window.get_music_info, media, load_cover=False, load_lyrics=False, load_playlist_cover=True)
+            playlist_executor.submit(main_window.get_music_info, media, load_cover=False, load_lyrics=False, load_playlist_cover=True)
 
     def show_hide(self):
         if not self.isAncestorOf(app.focusWidget()) and not self.playlist_widget.isAncestorOf(app.focusWidget()):
@@ -871,6 +944,10 @@ class MyPlaylist(QtWidgets.QFrame):
         main_window.playlist.playlist.clear()
         main_window.playlist.playlist_random.clear()
         main_window.None_play()
+        write_status('index', 0)
+        write_status('position', 0)
+        write_status('files', ['playlist'])
+        write_status('files', ['playlist_random'])
 
     def add_file_button_clicked(self):
         self.show_timer.stop()
@@ -967,7 +1044,7 @@ class MyLabel(QtWidgets.QLabel):
 class SongCoverLabel(QtWidgets.QLabel):
     def __init__(self, *args, **kwargs):
         super(SongCoverLabel, self).__init__(*args, **kwargs)
-        # self.cover_source = 'netease'
+        self.setting_status = False
         self._parent: MainWindow = self.parent()
         self.song_cover_pixmap = QtGui.QPixmap(self._parent.resource.no_song_cover)
         self.right_button_menu = QtWidgets.QMenu(self)
@@ -989,12 +1066,13 @@ class SongCoverLabel(QtWidgets.QLabel):
         self.right_button_menu.addAction(self.kuwo_action)
 
     def cover_source_changed(self, action: QtGui.QAction):
-        main_window.media.cover_source = action.objectName()
-        main_window.playlist.playlist[main_window.playlist.index].cover_source = action.objectName()
-        executor.submit(lambda: main_window.get_music_info(main_window.media, load_lyrics=False))
-        for i in (self.netease_action, self.kugou_action, self.kuwo_action):
-            i.setChecked(False)
-        action.setChecked(True)
+        if not self.setting_status:
+            main_window.media.cover_source = action.objectName()
+            main_window.playlist.playlist[main_window.playlist.index].cover_source = action.objectName()
+            executor.submit(lambda: main_window.get_music_info(main_window.media, load_lyrics=False, load_playlist_cover=True))
+            for i in (self.netease_action, self.kugou_action, self.kuwo_action):
+                i.setChecked(False)
+            action.setChecked(True)
 
     def set_button_status(self, source: str):
         for i in (self.netease_action, self.kugou_action, self.kuwo_action):
@@ -1020,6 +1098,9 @@ class SongCoverLabel(QtWidgets.QLabel):
         self.setPixmap(self.song_cover_pixmap.scaled(scaled_size, scaled_size, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation))
 
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent):
+        self.setting_status = True
+        self.set_button_status(main_window.media.cover_source)
+        self.setting_status = False
         self.right_button_menu.exec(event.globalPos())
 
 
@@ -1027,8 +1108,7 @@ class LyricsScrollArea(QtWidgets.QScrollArea):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.lyrics_time = 0
-        # self.lyrics_source = 'local'
-        self.frist_right_button = True
+        self.setting_status = False
         self.setMouseTracking(True)
         self.lyrics_scrolling_timer = QtCore.QTimer(self)
         self.lyrics_scrolling_timer.setInterval(100)
@@ -1058,12 +1138,13 @@ class LyricsScrollArea(QtWidgets.QScrollArea):
 
     def lyrics_source_changed(self, action: QtGui.QAction):
         # self.lyrics_source = action.objectName()
-        main_window.media.lyrics_source = action.objectName()
-        main_window.playlist.playlist[main_window.playlist.index].lyrics_source = action.objectName()
-        executor.submit(lambda: main_window.get_music_info(main_window.media, load_cover=False))
-        for i in (self.local_action, self.netease_action, self.kugou_action, self.kuwo_action):
-            i.setChecked(False)
-        action.setChecked(True)
+        if not self.setting_status:
+            main_window.media.lyrics_source = action.objectName()
+            main_window.playlist.playlist[main_window.playlist.index].lyrics_source = action.objectName()
+            executor.submit(lambda: main_window.get_music_info(main_window.media, load_cover=False))
+            for i in (self.local_action, self.netease_action, self.kugou_action, self.kuwo_action):
+                i.setChecked(False)
+            action.setChecked(True)
 
     def set_button_status(self, source: str):
         for i in (self.local_action, self.netease_action, self.kugou_action, self.kuwo_action):
@@ -1097,12 +1178,12 @@ class LyricsScrollArea(QtWidgets.QScrollArea):
         event.ignore()
 
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent):
+        self.local_action.setEnabled(False)
         if main_window.media.lyrics:
             self.local_action.setEnabled(True)
-        elif self.frist_right_button:
-            self.frist_right_button = False
-            self.lyrics_source_changed(self.netease_action)
-            self.local_action.setEnabled(False)
+        self.setting_status = True
+        self.set_button_status(main_window.media.lyrics_source)
+        self.setting_status = False
         self.right_button_menu.exec(event.globalPos())
 
 
@@ -1110,9 +1191,9 @@ class MainWindow(QtWidgets.QMainWindow):
     run_function = QtCore.Signal(object)
     def __init__(self):
         super().__init__()
-        status_info: dict[str, list|str|dict[str,list]] = eval(open(status_cache_path, "r", encoding="utf-8").read())
+        self.status_info: dict[str, list|str|dict[str,list]] = eval(open(status_cache_path, "r", encoding="utf-8").read())
         self.edge = None
-        self.position = status_info["position"]
+        self.position = self.status_info["position"]
         self.renew_position_times = 0
         self.last_row = -1
         self.music_info = dict()
@@ -1132,9 +1213,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self.player = MyMediaPlayer(self)
         self.audio_output = QtMultimedia.QAudioOutput()
-        self.audio_output.setVolume(status_info["volume"]/100)
         self.player.setAudioOutput(self.audio_output)
-        self.playlist = PlayList(self.player, status_info["index"], status_info["play_mode"], status_info["files"])
+        self.playlist = PlayList(self.player, self.status_info["index"], self.status_info["play_mode"], self.status_info["files"])
         self.lyrics_time = []
         self.last_lyrics_label: QtWidgets.QLabel = None
         self.last_MediaFrame: MediaFrame = None
@@ -1239,7 +1319,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.volume_widget.setMinimum(0)
         self.volume_widget.setMaximum(100)
         self.volume_widget.setMaximumWidth(self.volume_widget.sizeHint().width())
-        self.volume_widget.setValue(status_info['volume'])
+        self.volume_widget.setValue(self.status_info['volume'])
         # self.volume_widget.valueChanged.connect(lambda value: (self.audio_output.setVolume(value / 100), self.volume_button.setIcon(self.resource.volume_high if value > 60 else self.resource.volume_medium if value > 30 else self.resource.volume_low)))
         self.volume_widget.hide()
         self.volume_animation_pos = QtCore.QPropertyAnimation(self.volume_widget, b'pos')
@@ -1285,51 +1365,60 @@ class MainWindow(QtWidgets.QMainWindow):
         elif self.playlist.play_mode == 2:
             self.play_mode_button.setIcon(self.resource.repeat_once)
             self.play_mode_button.setToolTip('单曲循环')
+        self.audio_output.setVolume(self.status_info["volume"]/100)
         self.volume_button.setToolTip(f'音量:{int(self.audio_output.volume() * 100):.0f}')
         self.play_list_button.setToolTip('播放列表')
         self.adjustSize()
         self.load_lyrics(((0, '歌曲歌词'),))
-        # QtCore.QTimer.singleShot(10, lambda: self.playlist.add_media_from_file(Path('E:/Music/网易云音乐/我喜欢的音乐')))
+        if len(sys.argv) == 2:
+            if Path(sys.argv[1]).exists():
+                QtCore.QTimer.singleShot(500, lambda: self.playlist.add_media_from_file(Path(sys.argv[1])))
 
     def renew_data(self):
-        if self.position:
-            self.player.setPosition(self.position)
-            self.position = 0
-        position = self.player.position()
-        self.renew_position_times += 1
-        if self.renew_position_times >= 15:
-            self.renew_position_times = 0
-            write_status("position", position)
-        self.play_progress.setValue(position)
-        self.play_time_label.setText(QtCore.QTime(0, 0, 0).addSecs(position // 1000).toString('hh:mm:ss'))
-        self.remain_time_label.setText(QtCore.QTime(0, 0, 0).addSecs((self.play_progress.maximum() - position) // 1000).toString('hh:mm:ss'))
-        row = len(tuple(i for i in self.lyrics_time if i <= position)) - 1
-        if -1 < row:
-            if row != self.last_row:
-                self.last_row = row
-                try:
+        try:
+            if self.position:
+                self.player.setPosition(self.position)
+                self.position = 0
+            position = self.player.position()
+            self.renew_position_times += 1
+            if self.renew_position_times >= 15:
+                self.renew_position_times = 0
+                self.status_info = write_status("position", position)
+            self.play_progress.setValue(position)
+            self.play_time_label.setText(QtCore.QTime(0, 0, 0).addSecs(position // 1000).toString('hh:mm:ss'))
+            self.remain_time_label.setText(QtCore.QTime(0, 0, 0).addSecs((self.play_progress.maximum() - position) // 1000).toString('hh:mm:ss'))
+            row = len(tuple(i for i in self.lyrics_time if i <= position)) - 1
+            if -1 < row:
+                if row != self.last_row:
+                    self.last_row = row
+                    try:
+                        font = self.last_lyrics_label.font()
+                        font.setBold(False)
+                        font.setPointSize(12)
+                        self.last_lyrics_label.setFont(font)
+                    except:
+                        pass
+                    self.last_lyrics_label = self.lyrics_layout.itemAt(row).widget()
                     font = self.last_lyrics_label.font()
-                    font.setBold(False)
-                    font.setPointSize(12)
+                    font.setBold(True)
+                    font.setPointSize(14)
                     self.last_lyrics_label.setFont(font)
-                except:
-                    pass
-                self.last_lyrics_label = self.lyrics_layout.itemAt(row).widget()
-                font = self.last_lyrics_label.font()
-                font.setBold(True)
-                font.setPointSize(14)
-                self.last_lyrics_label.setFont(font)
-            if self.lyrics_scrolling and self.last_lyrics_label:
-                try:
-                    frame_geometry = self.last_lyrics_label.frameGeometry()
-                    value = (frame_geometry.top() + frame_geometry.height() / 2) - self.lyrics_area.viewport().height() / 2
-                    if self.renew_data_time.isActive():
-                        if not self.scroll_bar_animation_value.endValue() or abs(value - self.scroll_bar_animation_value.endValue()) > 0.5:
-                            self.lyrics_scrolling_animation(value)
-                    else:
-                        self.lyrics_area.verticalScrollBar().setValue(value)
-                except:
-                    pass
+                if self.lyrics_scrolling and self.last_lyrics_label:
+                    try:
+                        frame_geometry = self.last_lyrics_label.frameGeometry()
+                        value = (frame_geometry.top() + frame_geometry.height() / 2) - self.lyrics_area.viewport().height() / 2
+                        if self.renew_data_time.isActive():
+                            if not self.scroll_bar_animation_value.endValue() or abs(value - self.scroll_bar_animation_value.endValue()) > 0.5:
+                                self.lyrics_scrolling_animation(value)
+                        else:
+                            self.lyrics_area.verticalScrollBar().setValue(value)
+                    except:
+                        pass
+        except Exception as e:
+            with open(status_cache_path, 'w', encoding='utf-8') as file:
+                json.dump(self.status_info, file, ensure_ascii=False, indent=4)
+            print(e)
+            self.close()
 
     def lyrics_scrolling_animation(self, value):
         if self.scroll_bar_animation_value.state() == QtCore.QAbstractAnimation.State.Running:
@@ -1360,10 +1449,7 @@ class MainWindow(QtWidgets.QMainWindow):
             label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             self.lyrics_layout.addWidget(label)
 
-    def play_mode_button_clicked(self):
-        self.playlist.play_mode += 1
-        if self.playlist.play_mode == 3:
-            self.playlist.play_mode = 0
+    def play_mode_changed(self):
         write_status("play_mode", self.playlist.play_mode)
         if not self.playlist.play_mode:
             self.play_mode_button.setIcon(self.resource.repeat)
@@ -1379,7 +1465,7 @@ class MainWindow(QtWidgets.QMainWindow):
             playlist_widget = tuple(self.playlist_widget.playlist_layout.itemAt(i) for i in range(self.playlist_widget.playlist_layout.count()))
             for i in self.playlist.playlist_random:
                 self.playlist_widget.playlist_layout.addWidget(playlist_widget[self.playlist.playlist.index(i)].widget())
-            self.playlist_widget.move(self.geometry().bottomLeft()+QtCore.QPoint(0, -self.playlist_widget.height()))
+            self.playlist_widget.move(self.geometry().bottomLeft() + QtCore.QPoint(0, -self.playlist_widget.height()))
             self.playlist_widget.isNormalShow = False
             self.playlist_widget.show()
             self.playlist_widget.isNormalShow = True
@@ -1397,7 +1483,7 @@ class MainWindow(QtWidgets.QMainWindow):
             playlist_widget = tuple(self.playlist_widget.playlist_layout.itemAt(i) for i in range(self.playlist_widget.playlist_layout.count()))
             for i in self.playlist.playlist:
                 self.playlist_widget.playlist_layout.addWidget(playlist_widget[self.playlist.playlist_random.index(i)].widget())
-            self.playlist_widget.move(self.geometry().bottomLeft()+QtCore.QPoint(0, -self.playlist_widget.height()))
+            self.playlist_widget.move(self.geometry().bottomLeft() + QtCore.QPoint(0, -self.playlist_widget.height()))
             self.playlist_widget.isNormalShow = False
             self.playlist_widget.show()
             self.playlist_widget.isNormalShow = True
@@ -1407,6 +1493,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.playlist_widget.SetScrollBarValue(media_frame.frameGeometry().top())
             except:
                 pass
+
+    def play_mode_button_clicked(self):
+        self.playlist.play_mode += 1
+        if self.playlist.play_mode == 3:
+            self.playlist.play_mode = 0
+        self.play_mode_changed()
 
     def get_music_info(self, media: Media, load_cover=True, load_lyrics=True, load_playlist_cover=False):
         if load_lyrics:
@@ -1432,11 +1524,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception as e:
                     print(e)
                     return
-            cover_music_info = music_info[('netease', 'kugou', 'kuwo').index(self.media.cover_source)]
+            cover_music_info = music_info[('netease', 'kugou', 'kuwo').index(media.cover_source)]
             if media.lyrics_source == 'local':
                 lyrics_music_info = None
             else:
-                lyrics_music_info = music_info[('netease', 'kugou', 'kuwo').index(self.media.lyrics_source)]
+                lyrics_music_info = music_info[('netease', 'kugou', 'kuwo').index(media.lyrics_source)]
             if (not cover_path.exists() or cover_path.stat().st_size == 0) and (load_cover or load_playlist_cover):
                 cover = cover_music_info['self'].get_cover(cover_music_info['pic'])
                 with open(cover_path, 'wb') as f:
@@ -1448,7 +1540,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     f.write(str(lyrics))
                     f.flush()
         if load_playlist_cover:
-            executor.submit(self.load_playlist_cover_thread, media)
+            executor.submit(lambda: self.load_playlist_cover_thread(media))
+            # threading.Thread(target=lambda: self.load_playlist_cover_thread(media), daemon=True).start()
 
     def load_lyrics_thread(self, media: Media):
         def function():
@@ -1507,10 +1600,11 @@ class MainWindow(QtWidgets.QMainWindow):
             media_frame: MediaFrame = self.playlist_widget.playlist_layout.itemAt((self.playlist.playlist_random.index if self.playlist.play_mode == 1 else self.playlist.playlist.index)(media)).widget()
             media_frame.setPixmap(QtGui.QPixmap(cover_path))
 
-        cover_path = cover_cache_path.joinpath(self.media.cover_source, f'{media.hash_md5}.cover')
+        cover_path = cover_cache_path.joinpath(media.cover_source, f'{media.hash_md5}.cover')
         num = 0
         while not cover_path.exists():
             if num > 30:
+                print(f'<{media.path.stem}>未获取到封面,{cover_path}')
                 return
             num += 1
             time.sleep(0.1)
@@ -1532,7 +1626,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.song_title_label.x = 0
         self.song_artist_label.setText('歌手名称')
         self.song_artist_label.x = 0
-        self.lyrics_area.frist_right_button = False
         self.player.setSource(QtCore.QUrl())
 
     def play_source_changed(self):
@@ -1543,7 +1636,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.playlist_widget.SetScrollBarValue(media_frame.frameGeometry().top())
         except:
             pass
-        self.song_cover_label.set_button_status(self.media.cover_source)
         self.lyrics_area.set_button_status(self.media.lyrics_source)
         self.play_progress.setValue(0)
         self.play_time_label.setText('00:00:00')
@@ -1551,7 +1643,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.song_title_label.x = 0
         self.song_artist_label.setText(self.media.artist)
         self.song_artist_label.x = 0
-        self.lyrics_area.frist_right_button = True
         try:
             if self.last_MediaFrame:
                 self.last_MediaFrame.isPlaying = False
@@ -1781,9 +1872,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
             else:
                 i.cancel()
+        print(all_executor_threads)
         print(threading.active_count())
+        print(threading.enumerate())
         executor.shutdown(wait=False)
         app.quit()
+        threading.Thread(target=force_exit, daemon=True).start()
 
 
 __file__ = Path(sys.argv[0]).resolve()
@@ -1794,6 +1888,7 @@ playlist_executor = ThreadPoolExecutor(max_workers=(cpu_count//2 if cpu_count//2
 # playlist_executor = ThreadPoolExecutor(max_workers=4)
 all_executor_threads: list[futures.Future] = []
 close_thread = False
+cache_reading = False
 status_cache_path = Path(__file__).parent.joinpath('status.cache')
 write_status('normal')
 media_info_cache_path = Path(__file__).parent.joinpath('media_info')
@@ -1811,6 +1906,7 @@ translator.load('qt_zh_CN.qm')
 app.installTranslator(translator)
 pixels_per_px = app.primaryScreen().devicePixelRatio() ** 2
 main_window = MainWindow()
+signal.signal(signal.SIGINT, signal_handler)
 main_window.setWindowIcon(Resource().music_app_icon)
 main_window.show()
 threading.Thread(target=socket_server, daemon=True).start()
